@@ -1,0 +1,4 @@
+[
+  { "Name": "codigest", "Kind": "uv", "Command": "cdg", "Package": "codigest", "Names": ["codigest"] },
+  { "Name": "deai", "Kind": "uv", "Command": "deai", "Package": "git-deai", "Names": ["git-deai", "deai"] }
+]

@@ -1,0 +1,5 @@
+#!/bin/sh
+# A global core.hooksPath replaces .git/hooks; hand over to the repository's own hook.
+local_hook="$(git rev-parse --git-dir)/hooks/$(basename "$0")"
+[ -x "$local_hook" ] && exec "$local_hook" "$@"
+exit 0

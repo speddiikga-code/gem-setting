@@ -1,0 +1,25 @@
+#!/bin/sh
+# Run the lint that CI runs before the push, so a style error is not first found in a failed run
+# (every push to a pull request starts CI). It reads the pinned ruff version from the repository's
+# .github/workflows/lint.yml and runs the same two commands. Skip with SKIP_LOCAL_CI=1; add the fast
+# tests with LOCAL_CI_TESTS=1. Then hand over to the repository's own pre-push hook.
+root="$(git rev-parse --show-toplevel)"
+lint="$root/.github/workflows/lint.yml"
+if [ -z "$SKIP_LOCAL_CI" ] && [ -f "$lint" ] && command -v uvx >/dev/null 2>&1; then
+    ruff="$(grep -o 'ruff@[0-9][0-9.]*' "$lint" | head -n 1)"
+    if [ -n "$ruff" ]; then
+        (cd "$root" && uvx --quiet "$ruff" check </dev/null && uvx --quiet "$ruff" format --check </dev/null) || {
+            echo "pre-push: the lint that CI runs fails here. Fix it, or push with SKIP_LOCAL_CI=1." >&2
+            exit 1
+        }
+    fi
+fi
+if [ -n "$LOCAL_CI_TESTS" ] && [ -f "$root/pyproject.toml" ] && [ -d "$root/tests" ] && command -v uv >/dev/null 2>&1; then
+    (cd "$root" && uv run --quiet pytest -q -x </dev/null) || {
+        echo "pre-push: the tests fail here. Fix them, or push with SKIP_LOCAL_CI=1." >&2
+        exit 1
+    }
+fi
+local_hook="$(git rev-parse --git-dir)/hooks/$(basename "$0")"
+[ -x "$local_hook" ] && exec "$local_hook" "$@"
+exit 0

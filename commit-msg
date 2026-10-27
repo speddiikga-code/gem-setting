@@ -1,0 +1,11 @@
+#!/bin/sh
+# Strip AI co-author and "generated with" lines from every commit message,
+# whichever tool wrote them, then run the repository's own commit-msg hook.
+sed -i -E \
+  -e '/^[[:space:]]*co-authored-by:.*(claude|anthropic|copilot|cursor|codex|openai|chatgpt|gemini|devin|aider|codeium|windsurf|tabnine|jules)/Id' \
+  -e '/^[[:space:]]*claude-session:/Id' \
+  -e '/generated (with|by) .*(claude|copilot|cursor|codex|chatgpt|gemini|aider)/Id' \
+  "$1"
+local_hook="$(git rev-parse --git-dir)/hooks/commit-msg"
+[ -x "$local_hook" ] && exec "$local_hook" "$@"
+exit 0
