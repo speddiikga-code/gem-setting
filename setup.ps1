@@ -111,6 +111,13 @@ if ($sandbox) {
         if ($saved[$name]) { Set-Item "env:$name" $saved[$name] } else { Remove-Item "env:$name" -ErrorAction Ignore }
     }
     Write-Host "sandbox: every write goes under $sandbox" -ForegroundColor Yellow
+} else {
+    # A shell opened before an earlier run saved these lacks them, and a rerun from it would
+    # silently drop the overlay and reset DEV and the language; the saved user values win.
+    foreach ($name in 'DEV', 'AGENT_LANGUAGE', 'DEVSTARTER_OVERLAY') {
+        $value = [Environment]::GetEnvironmentVariable($name, 'User')
+        if ($value) { Set-Item "env:$name" $value }
+    }
 }
 
 function Set-UserVariable([string]$Name, [string]$Value) {
