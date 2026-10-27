@@ -20,6 +20,6 @@ if [ -n "$LOCAL_CI_TESTS" ] && [ -f "$root/pyproject.toml" ] && [ -d "$root/test
         exit 1
     }
 fi
-local_hook="$(git rev-parse --git-dir)/hooks/$(basename "$0")"
+local_hook="$(git rev-parse --git-common-dir)/hooks/$(basename "$0")"
 [ -x "$local_hook" ] && exec "$local_hook" "$@"
 exit 0
