@@ -18,10 +18,19 @@ param(
     [int]$Width = 1600
 )
 $ErrorActionPreference = 'Stop'
-$Source = (Resolve-Path $Source).Path
+# .NET and COM resolve relative paths against the process directory, which Set-Location does not
+# move, so both paths are made absolute against the PowerShell location. Brackets in a name such as
+# deck[final].pptx stay literal, not a wildcard; tab completion writes that name as deck`[final`].pptx,
+# so those escapes are removed first.
+$Source, $Target = $Source, $Target | ForEach-Object {
+    $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath([WildcardPattern]::Unescape($_))
+}
+if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) { throw "no such file: $Source" }
+# a folder would otherwise be taken as a locked view file and get an extensionless _view2 inside it
+if ($Action -ne 'render' -and (Test-Path -LiteralPath $Target -PathType Container)) { throw "$Target is a folder; give the path of the file to write" }
 
 function Test-Locked([string]$Path) {
-    if (-not (Test-Path $Path)) { return $false }
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
     try { [IO.File]::Open($Path, 'Open', 'ReadWrite', 'None').Dispose(); $false } catch [IO.IOException] { $true }
 }
 
@@ -33,7 +42,6 @@ function Copy-Atomic([string]$From, [string]$To) {
 
 # Writes $From to $To, or to the first free <To>_viewN when $To is open; removes free extras.
 function Publish-View([string]$From, [string]$To) {
-    $To = [IO.Path]::GetFullPath($To)
     $dir, $stem, $ext = [IO.Path]::GetDirectoryName($To), [IO.Path]::GetFileNameWithoutExtension($To), [IO.Path]::GetExtension($To)
     $extras = @(Get-ChildItem -LiteralPath $dir -Filter "${stem}_view*$ext" | Where-Object Name -Match "^$([regex]::Escape($stem))_view\d+$([regex]::Escape($ext))$")
     if (-not (Test-Locked $To)) {
@@ -65,7 +73,7 @@ $wasRunning = [bool](Get-Process POWERPNT -ErrorAction SilentlyContinue)
 foreach ($try in 1..3) {
     try { $app = New-Object -ComObject PowerPoint.Application; break } catch {
         if ($try -lt 3) { Start-Sleep -Seconds 3; continue }
-        Remove-Item $copy -Force
+        Remove-Item -LiteralPath $copy -Force
         throw "PowerPoint COM is not available ($($_.Exception.Message))."
     }
 }
@@ -76,7 +84,7 @@ try {
     if ($Action -eq 'render') {
         $height = [int]($Width * $slideH / $slideW)
         foreach ($n in ($Slides ?? 1..$pres.Slides.Count)) {
-            $png = Join-Path (Resolve-Path $Target) ('s{0:d2}.png' -f $n)
+            $png = Join-Path $Target ('s{0:d2}.png' -f $n)
             $pres.Slides($n).Export($png, 'PNG', $Width, $height)
             $png
         }
@@ -93,12 +101,12 @@ try {
 } finally {
     if (-not $wasRunning) { $app.Quit() }
     [void][Runtime.InteropServices.Marshal]::ReleaseComObject($app)
-    Remove-Item $copy -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $copy -Force -ErrorAction SilentlyContinue
 }
 if ($Action -eq 'pdf') {
     # the spooler finishes the file after PrintOut returns
     $deadline = (Get-Date).AddSeconds(60)
-    while (-not ((Test-Path $printed) -and -not (Test-Locked $printed) -and (Get-Item $printed).Length -gt 0)) {
+    while (-not ((Test-Path -LiteralPath $printed) -and -not (Test-Locked $printed) -and (Get-Item -LiteralPath $printed).Length -gt 0)) {
         if ((Get-Date) -gt $deadline) { throw "Microsoft Print to PDF wrote nothing to $printed" }
         Start-Sleep -Milliseconds 300
     }
@@ -109,6 +117,6 @@ if ($Action -eq 'pdf') {
         if ($LASTEXITCODE) { throw "office-view-crop.py failed ($LASTEXITCODE)" }
         Publish-View $trimmed $Target
     } finally {
-        Remove-Item $printed, $trimmed -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $printed, $trimmed -Force -ErrorAction SilentlyContinue
     }
 }
