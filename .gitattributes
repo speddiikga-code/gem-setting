@@ -1,0 +1,5 @@
+# Git runs these hooks with sh, which rejects CRLF; cmd.exe misparses .cmd files saved with LF.
+commit-msg text eol=lf
+forward-hook text eol=lf
+pre-push text eol=lf
+*.cmd text eol=crlf
