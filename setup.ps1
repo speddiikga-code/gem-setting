@@ -10,6 +10,9 @@
 # A parameter wins over the overlay's config.json, which wins over what the machine already has.
 # DEVSTARTER_SANDBOX=<dir> sends every user-level write (profile, home files, git config, user
 # variables, terminal settings) into <dir>; tests/run.ps1 uses it to run this script end to end.
+# A stray word, such as the second half of an unquoted -GitName Boseok Kang, would otherwise
+# become -Dev, and a misspelled parameter would be ignored without a word.
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [switch]$Apps,
     [switch]$Tools,
@@ -24,26 +27,43 @@ $here = $PSScriptRoot
 
 function Step($text) { Write-Host "-> $text" -ForegroundColor Cyan }
 
-# Writes $Text to $Path only when it differs; a different existing file is kept as <Path>.bak.
+# Copies $Path to <Path>.bak, or to <Path>.<yyyyMMdd-HHmmss>.bak when that exists: the undo steps
+# restore <Path>.bak as the file from before the kit, so the first one is never replaced.
+function Backup-File([string]$Path) {
+    $bak = "$Path.bak"
+    if (Test-Path -LiteralPath $bak) { $bak = "$Path.$(Get-Date -Format yyyyMMdd-HHmmss).bak" }
+    Copy-Item -LiteralPath $Path -Destination $bak -Force
+}
+
+# Writes $Text to $Path only when it differs; a different existing file is backed up first.
 # Returns whether it wrote.
 function Write-IfChanged([string]$Path, [string]$Text) {
     $old = (Test-Path -LiteralPath $Path) ? (Get-Content -LiteralPath $Path -Raw) : $null
-    if ($old -eq $Text) { return $false }
-    if ($old) { Copy-Item -LiteralPath $Path "$Path.bak" -Force }
+    if ($old -ceq $Text) { return $false }
+    if ($old) { Backup-File $Path }
     New-Item -ItemType Directory -Force (Split-Path $Path) | Out-Null
     [IO.File]::WriteAllText($Path, $Text)
     $true
 }
 
 # Sets only the attribution key of a Claude Code settings.json; every other key stays as it was,
-# and the file before the change is kept as settings.json.bak.
+# and the file before the change is backed up. A file that is not a JSON object is left alone.
 function Set-ClaudeAttribution([string]$Path) {
-    $json = (Test-Path -LiteralPath $Path) ? (Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json) : $null
-    $json ??= [pscustomobject]@{}
-    $want = [pscustomobject]@{ commit = ''; pr = ''; sessionUrl = $false }
-    if (($json.attribution | ConvertTo-Json -Compress) -eq ($want | ConvertTo-Json -Compress)) { return $false }
-    $json | Add-Member -Force attribution $want
-    if (Test-Path -LiteralPath $Path) { Copy-Item -LiteralPath $Path "$Path.bak" -Force }
+    $exists = Test-Path -LiteralPath $Path
+    $text = $exists ? (Get-Content -LiteralPath $Path -Raw) : $null
+    $json = [ordered]@{}
+    if ("$text".Trim()) {
+        # A hashtable also reads keys that differ only in case, and an empty key, which are valid JSON.
+        $json = try { $text | ConvertFrom-Json -AsHashtable -NoEnumerate } catch { $null }
+    }
+    # Claude Code needs an object; an array or a string would be rewritten, and backed up again, on every run.
+    if ($json -isnot [Collections.IDictionary]) {
+        throw "$Path is not valid JSON or not a JSON object; fix the file or delete it (Claude Code then starts from its defaults)"
+    }
+    $want = [ordered]@{ commit = ''; pr = ''; sessionUrl = $false }
+    if (($json['attribution'] | ConvertTo-Json -Compress) -eq ($want | ConvertTo-Json -Compress)) { return $false }
+    $json['attribution'] = $want
+    if ($exists) { Backup-File $Path }
     New-Item -ItemType Directory -Force (Split-Path $Path) | Out-Null
     $json | ConvertTo-Json -Depth 32 | Set-Content -LiteralPath $Path
     $true
@@ -124,8 +144,10 @@ function Set-UserVariable([string]$Name, [string]$Value) {
     if ($sandbox) {
         $file = Join-Path $sandbox 'user-variables.json'
         $vars = (Test-Path $file) ? (Get-Content $file -Raw | ConvertFrom-Json -AsHashtable) : @{}
-        $vars[$Name] = $Value
-        $vars | ConvertTo-Json | Set-Content $file
+        if ($vars[$Name] -ne $Value) {
+            $vars[$Name] = $Value
+            $vars | ConvertTo-Json | Set-Content $file
+        }
     } elseif ([Environment]::GetEnvironmentVariable($Name, 'User') -ne $Value) {
         [Environment]::SetEnvironmentVariable($Name, $Value, 'User')
     }
@@ -162,6 +184,11 @@ Set-UserVariable DEV (Resolve-Path $Dev).Path
 
 $Language = $Language ? $Language : $config.language
 if ($Language) { Set-UserVariable AGENT_LANGUAGE $Language }
+
+# With the Python install manager, the WindowsApps python.exe is its alias rather than the Store
+# stub, and uv running it while looking for an interpreter silently installs a runtime. Limiting
+# uv to the Pythons it manages also keeps uv the one Python source.
+Set-UserVariable UV_PYTHON_PREFERENCE only-managed
 
 # Native commands do not throw on a nonzero exit code, so check it: a failed step is reported
 # in the summary and the script exits 1. Every step is safe to repeat, so rerunning retries it.
@@ -252,7 +279,12 @@ foreach ($target in "$userHome\.claude\CLAUDE.md", "$userHome\.codex\AGENTS.md",
 }
 
 Step 'Claude Code: no co-author, PR or session lines'
-Set-ClaudeAttribution "$userHome\.claude\settings.json" | Out-Null
+try { Set-ClaudeAttribution "$userHome\.claude\settings.json" | Out-Null }
+catch {
+    $message = $_.Exception.Message.TrimEnd('.')
+    Write-Host "   failed: $message" -ForegroundColor Red
+    $failed.Add("Claude Code attribution was not set: $message. Retry: .\setup.ps1")
+}
 
 # Settings only stop what Claude Code adds itself; this hook also strips AI credit
 # lines that any tool writes into a commit message, then runs the repo's own hook.
@@ -264,9 +296,14 @@ if ($hasGit) {
         Write-IfChanged "$hooks\$name" ((Get-Content -Raw "$here\$source") -replace "`r`n", "`n") | Out-Null
     }
     Write-Hook 'commit-msg' 'commit-msg'
+    # The receive hooks keep a push-to-deploy repository on this PC deploying. Left out:
+    # reference-transaction and post-index-change, which would start sh on every ref update and
+    # index write, and push-to-checkout, whose mere presence makes git skip its own
+    # updateInstead checkout, so a forwarder with no repository hook leaves the working tree stale.
     foreach ($name in 'applypatch-msg', 'pre-applypatch', 'post-applypatch', 'pre-commit', 'pre-merge-commit',
                       'prepare-commit-msg', 'post-commit', 'pre-rebase', 'post-checkout', 'post-merge',
-                      'post-rewrite', 'pre-auto-gc') {
+                      'post-rewrite', 'pre-auto-gc', 'pre-receive', 'update', 'post-receive', 'post-update',
+                      'proc-receive', 'sendemail-validate') {
         Write-Hook 'forward-hook' $name
     }
     # pre-push is the one forwarding hook that also runs the lint CI runs first (it still hands over)

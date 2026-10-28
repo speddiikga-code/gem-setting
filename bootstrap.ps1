@@ -4,7 +4,19 @@
 $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
 
-Write-Host 'dev-starter: setting up this PC' -ForegroundColor Cyan
+Write-Host 'gem-setting: setting up this PC' -ForegroundColor Cyan
+
+# START.cmd passes its command line on as typed. In -Dev "C:\My Dev\" the backslash escapes the
+# closing quote, so a quote lands inside an argument and the arguments after it are split wrongly,
+# for example into a git user.name of 'Boseok Kang -Language Korean'. No intended argument holds a quote.
+$quoted = @($args | Where-Object { "$_".Contains('"') })
+if ($quoted.Count) {
+    Write-Host 'These arguments contain a double quote, so they were split wrongly:' -ForegroundColor Red
+    foreach ($arg in $quoted) { Write-Host "   $arg" -ForegroundColor Red }
+    Write-Host 'Put names with spaces in quotes, and end a folder without a backslash, for example:' -ForegroundColor Red
+    Write-Host '   START.cmd -Dev "D:\My Projects" -GitName "Your Name"' -ForegroundColor Red
+    exit 1
+}
 
 # Files extracted from a downloaded zip carry the internet mark, which blocks the scripts setup.ps1 starts itself.
 Get-ChildItem -LiteralPath $here -Recurse -File | Unblock-File
