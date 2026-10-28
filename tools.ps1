@@ -121,8 +121,9 @@ $results = foreach ($tool in $selected) {
             } catch {
                 $status = 'failed'; $detail = "$_"
                 # Windows cannot replace a program that is running (os error 32)
-                $busy = @(Get-Process -Name $tool.Command, $tool.Name -ErrorAction SilentlyContinue)
-                if ($busy) { $detail += " ($($tool.Command) is running as pid $($busy.Id -join ', '); close what uses it and retry)" }
+                # a gh entry has no Command, and a null name makes Get-Process throw out of this handler
+                $busy = @(Get-Process -Name ($tool.Command, $tool.Name | Where-Object { $_ }) -ErrorAction SilentlyContinue)
+                if ($busy) { $detail += " ($(@($busy.ProcessName | Select-Object -Unique) -join ', ') is running as pid $($busy.Id -join ', '); close what uses it and retry)" }
             }
         }
     }
